@@ -5,7 +5,6 @@ import type { TFile } from 'obsidian'
 export const regexLineSplit = /\r?\n|\r|((\.|\?|!)( |\r?\n|\r))/g
 export const regexYaml = /^---\s*\n(.*?)\n?^---\s?/ms
 export const regexStripQuotes = /^"|"$|^'|'$/g
-export const chsRegex = /[\u4e00-\u9fa5]/
 export const regexExtensions = /(?:^|\s)\.(\w+)/g
 
 export const excerptBefore = 100
@@ -63,6 +62,8 @@ export type IndexedDocument = {
   headings1: string
   headings2: string
   headings3: string
+  /** Dedicated field for the Han-bigram fallback; excluded from normal BM25. */
+  hanBigrams: string
 
   // TODO: reimplement this
   doesNotExist?: boolean

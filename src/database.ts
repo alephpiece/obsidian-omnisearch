@@ -6,10 +6,13 @@ import type OmnisearchPlugin from './main'
 
 export class Database extends Dexie {
   public static readonly dbVersion = 10
+  /** Bump when the serialized MiniSearch field/tokenizer schema changes. */
+  public static readonly minisearchIndexVersion = 2
   searchHistory!: Dexie.Table<{ id?: number; query: string }, number>
   minisearch!: Dexie.Table<
     {
       date: string
+      indexVersion: number
       paths: DocumentRef[]
       data: AsPlainObject
     },
@@ -34,11 +37,15 @@ export class Database extends Dexie {
   //#endregion Table declarations
 
   public async getMinisearchCache(): Promise<{
+    indexVersion: number
     paths: DocumentRef[]
     data: AsPlainObject
   } | null> {
     try {
       const cachedIndex = (await this.plugin.database.minisearch.toArray())[0]
+      if (cachedIndex?.indexVersion !== Database.minisearchIndexVersion) {
+        return null
+      }
       return cachedIndex
     } catch (e) {
       new Notice(
@@ -57,6 +64,7 @@ export class Database extends Dexie {
     await database.minisearch.clear()
     await database.minisearch.add({
       date: new Date().toISOString(),
+      indexVersion: Database.minisearchIndexVersion,
       paths,
       data: minisearchJson,
     })

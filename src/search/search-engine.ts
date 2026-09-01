@@ -1,6 +1,7 @@
 import MiniSearch, {
   type AsPlainObject,
   type Options,
+  type SearchOptions,
   type SearchResult,
 } from 'minisearch'
 import {
@@ -15,13 +16,26 @@ import {
   countError,
   logVerbose,
   normalizeExactMatchContent,
+  pathWithoutFilename,
   removeDiacritics,
 } from '../tools/utils'
 import { Notice } from 'obsidian'
 import type { Query } from './query'
 import { sortBy } from 'es-toolkit/compat'
 import type OmnisearchPlugin from '../main'
+import { getHanBigrams, getHanRuns, hasHanRunsInFields } from './cjk'
 import { Tokenizer } from './tokenizer'
+
+const primarySearchFields = [
+  'basename',
+  // Different from `path`, since `path` is the unique index and needs to include the filename
+  'directory',
+  'aliases',
+  'content',
+  'headings1',
+  'headings2',
+  'headings3',
+]
 
 export class SearchEngine {
   private tokenizer: Tokenizer
@@ -171,9 +185,10 @@ export class SearchEngine {
         break
     }
 
-    const searchTokens = this.tokenizer.tokenizeForSearch(query.segmentsToStr())
+    const searchText = query.segmentsToStr()
+    const searchTokens = this.tokenizer.tokenizeForSearch(searchText)
     logVerbose(JSON.stringify(searchTokens, null, 1))
-    let results = this.minisearch.search(searchTokens, {
+    const primarySearchOptions: SearchOptions = {
       prefix: term => term.length >= options.prefixLength,
       // length <= 3: no fuzziness
       // length <= 5: fuzziness of 10%
@@ -191,6 +206,7 @@ export class SearchEngine {
         tags: settings.weightUnmarkedTags,
         unmarkedTags: settings.weightUnmarkedTags,
       },
+      fields: primarySearchFields,
       // The query is already tokenized, don't tokenize again
       tokenize: text => [text],
       boostDocument(_id, _term, storedFields) {
@@ -214,7 +230,68 @@ export class SearchEngine {
           1 + Math.exp(cutoff[settings.recencyBoost] * (daysElapsed / 1000))
         )
       },
-    })
+    }
+    let results = this.minisearch.search(searchTokens, primarySearchOptions)
+
+    // Dictionary segmentation is useful for natural ranking, but it cannot
+    // guarantee that an arbitrary Chinese substring is a dictionary word. Use
+    // a dedicated field of overlapping Han bigrams only as a recall fallback.
+    // Normal searches never query that field, so its extra terms do not affect
+    // the existing BM25 ranking path.
+    const hanRuns = getHanRuns(searchText).filter(
+      run => Array.from(run).length >= 2
+    )
+    if (hanRuns.length) {
+      const hanBigrams = hanRuns.flatMap(getHanBigrams)
+      let fallbackResults = this.minisearch.search(
+        { combineWith: 'AND', queries: hanBigrams },
+        {
+          ...primarySearchOptions,
+          fields: ['hanBigrams'],
+          prefix: false,
+          fuzzy: 0,
+        }
+      )
+
+      // Preserve adjacent Latin/numeric constraints in a mixed query. For
+      // example, "Obsidian时候" must not return a note containing only "时候".
+      const nonHanTokens = this.tokenizer.getNonHanTokens(searchText)
+      if (nonHanTokens.length) {
+        const nonHanResults = this.minisearch.search(
+          { combineWith: 'AND', queries: nonHanTokens },
+          primarySearchOptions
+        )
+        const nonHanIds = new Set(
+          nonHanResults.map(result => String(result.id))
+        )
+        fallbackResults = fallbackResults.filter(result =>
+          nonHanIds.has(String(result.id))
+        )
+      }
+
+      // Two bigrams from a longer query can occur in separate locations in one
+      // document. Verify only fallback candidates before ranking, preserving
+      // exact substring semantics without changing normal tag/path matches.
+      const hanRunsRequiringVerification = hanRuns.filter(
+        run => Array.from(run).length > 2
+      )
+      if (hanRunsRequiringVerification.length) {
+        fallbackResults = await this.filterResultsByHanRuns(
+          fallbackResults,
+          hanRunsRequiringVerification
+        )
+      }
+
+      const fallbackTerms = [...new Set([...hanRuns, ...nonHanTokens])]
+      fallbackResults = fallbackResults.map(result => ({
+        ...result,
+        // Bigram terms are an implementation detail. Highlight the query text
+        // users typed instead of every overlapping two-character term.
+        terms: fallbackTerms,
+        queryTerms: fallbackTerms,
+      }))
+      results = this.mergeSearchResults(results, fallbackResults)
+    }
 
     logVerbose(`Found ${results.length} results`, results)
 
@@ -564,16 +641,7 @@ export class SearchEngine {
           : term
         ).toLowerCase(),
       idField: 'path',
-      fields: [
-        'basename',
-        // Different from `path`, since `path` is the unique index and needs to include the filename
-        'directory',
-        'aliases',
-        'content',
-        'headings1',
-        'headings2',
-        'headings3',
-      ],
+      fields: [...primarySearchFields, 'hanBigrams'],
       storeFields: ['tags', 'mtime'],
       logger(_level, _message, code) {
         if (code === 'version_conflict') {
@@ -584,5 +652,44 @@ export class SearchEngine {
         }
       },
     }
+  }
+
+  private mergeSearchResults(
+    primary: SearchResult[],
+    fallback: SearchResult[]
+  ): SearchResult[] {
+    const merged = new Map(primary.map(result => [result.id, result]))
+    for (const result of fallback) {
+      if (!merged.has(result.id)) {
+        merged.set(result.id, result)
+      }
+    }
+    return [...merged.values()]
+  }
+
+  private async filterResultsByHanRuns(
+    results: SearchResult[],
+    hanRuns: string[]
+  ): Promise<SearchResult[]> {
+    const documents = await Promise.all(
+      results.map(result =>
+        this.plugin.documentsRepository.getDocument(String(result.id))
+      )
+    )
+
+    return results.filter((_, index) => {
+      const document = documents[index]
+      if (!document) return false
+      const fields = [
+        document.basename,
+        pathWithoutFilename(document.path),
+        document.aliases,
+        document.content,
+        document.headings1,
+        document.headings2,
+        document.headings3,
+      ]
+      return hasHanRunsInFields(fields, hanRuns)
+    })
   }
 }

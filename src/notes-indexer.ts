@@ -127,6 +127,7 @@ export class NotesIndexer {
       headings1: '',
       headings2: '',
       headings3: '',
+      hanBigrams: '',
 
       doesNotExist: true,
       parent,

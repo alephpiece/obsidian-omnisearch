@@ -2,6 +2,7 @@ import { normalizePath, TFile } from 'obsidian'
 import type { CanvasData } from 'obsidian/canvas'
 import type { IndexedDocument } from '../globals'
 import type OmnisearchPlugin from '../main'
+import { getHanBigramsFromFields } from '../search/cjk'
 import { getNonExistingNotes } from '../tools/notes'
 import {
   countError,
@@ -14,6 +15,7 @@ import {
   isFileOffice,
   isFilePDF,
   logVerbose,
+  pathWithoutFilename,
   warnVerbose,
 } from '../tools/utils'
 
@@ -233,6 +235,28 @@ export class DocumentsRepository {
         metadata?.frontmatter?.[this.plugin.settings.displayTitle] ?? ''
     }
     const tags = getTagsFromMetadata(metadata)
+    // Keep aliases separate so neither normal tokens nor Han bigrams can be
+    // fabricated across the boundary between two distinct aliases.
+    const aliases = getAliasesFromMetadata(metadata).join(' ')
+    const headings1 = metadata
+      ? extractHeadingsFromCache(metadata, 1).join(' ')
+      : ''
+    const headings2 = metadata
+      ? extractHeadingsFromCache(metadata, 2).join(' ')
+      : ''
+    const headings3 = metadata
+      ? extractHeadingsFromCache(metadata, 3).join(' ')
+      : ''
+    const hanBigrams = getHanBigramsFromFields([
+      file.basename,
+      pathWithoutFilename(file.path),
+      aliases,
+      content,
+      headings1,
+      headings2,
+      headings3,
+    ]).join(' ')
+
     return {
       basename: file.basename,
       displayTitle,
@@ -242,16 +266,11 @@ export class DocumentsRepository {
 
       tags: tags,
       unmarkedTags: tags.map(t => t.replace('#', '')),
-      aliases: getAliasesFromMetadata(metadata).join(''),
-      headings1: metadata
-        ? extractHeadingsFromCache(metadata, 1).join(' ')
-        : '',
-      headings2: metadata
-        ? extractHeadingsFromCache(metadata, 2).join(' ')
-        : '',
-      headings3: metadata
-        ? extractHeadingsFromCache(metadata, 3).join(' ')
-        : '',
+      aliases,
+      headings1,
+      headings2,
+      headings3,
+      hanBigrams,
     }
   }
 }

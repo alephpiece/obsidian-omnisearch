@@ -1,7 +1,8 @@
 import type { QueryCombination } from 'minisearch'
-import { BRACKETS_AND_SPACE, chsRegex, SPACE_OR_PUNCTUATION } from '../globals'
+import { BRACKETS_AND_SPACE, SPACE_OR_PUNCTUATION } from '../globals'
 import { logVerbose, removeBase64Images, splitCamelCase, splitHyphens } from '../tools/utils'
 import type OmnisearchPlugin from '../main'
+import { containsHan, splitAtHanBoundaries } from './cjk'
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- that's how you're supposed to import this package
 const markdownLinkExtractor = require('markdown-link-extractor') as (value: string) => string[]
@@ -28,7 +29,13 @@ export class Tokenizer {
         }
       }
 
-      let tokens = this.tokenizeTokens(text, { skipChs: true })
+      // Keep original tokens for backward compatibility, then add script-boundary
+      // tokens so a mixed value such as "Obsidian插件" can be found from either side.
+      const rawTokens = text.split(SPACE_OR_PUNCTUATION)
+      let tokens = rawTokens.flatMap(token => [
+        token,
+        ...splitAtHanBoundaries(token),
+      ])
       tokens = [...tokens.flatMap(token => [
         token,
         ...splitHyphens(token),
@@ -82,14 +89,28 @@ export class Tokenizer {
     }
   }
 
+  /**
+   * Non-Han terms used to constrain a Han-bigram fallback search. This keeps a
+   * query such as "Obsidian时候" from returning a note that only contains "时候".
+   */
+  public getNonHanTokens(text: string): string[] {
+    const urls = markdownLinkExtractor(text)
+    text = urls.reduce((acc, url) => acc.replace(url, ''), text)
+
+    return text
+      .split(SPACE_OR_PUNCTUATION)
+      .flatMap(splitAtHanBoundaries)
+      .filter(token => token && !containsHan(token))
+  }
+
   private tokenizeWords(text: string, { skipChs = false } = {}): string[] {
-    const tokens = text.split(BRACKETS_AND_SPACE)
+    const tokens = text.split(BRACKETS_AND_SPACE).flatMap(splitAtHanBoundaries)
     if (skipChs) return tokens
     return this.tokenizeChsWord(tokens)
   }
 
   private tokenizeTokens(text: string, { skipChs = false } = {}): string[] {
-    const tokens = text.split(SPACE_OR_PUNCTUATION)
+    const tokens = text.split(SPACE_OR_PUNCTUATION).flatMap(splitAtHanBoundaries)
     if (skipChs) return tokens
     return this.tokenizeChsWord(tokens)
   }
@@ -98,7 +119,7 @@ export class Tokenizer {
     const segmenter = this.plugin.getChsSegmenter() as { cut: (word: string, options: { search: boolean }) => string[] }
     if (!segmenter) return tokens
     return tokens.flatMap(word =>
-      chsRegex.test(word) ? segmenter.cut(word, { search: true }) : [word]
+      containsHan(word) ? segmenter.cut(word, { search: true }) : [word]
     )
   }
 }
