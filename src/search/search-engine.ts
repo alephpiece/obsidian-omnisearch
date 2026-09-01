@@ -271,7 +271,7 @@ export class SearchEngine {
 
       // Two bigrams from a longer query can occur in separate locations in one
       // document. Verify only fallback candidates before ranking, preserving
-      // exact substring semantics without changing normal tag/path matches.
+      // exact substring semantics without reading every normal-search result.
       const hanRunsRequiringVerification = hanRuns.filter(
         run => Array.from(run).length > 2
       )

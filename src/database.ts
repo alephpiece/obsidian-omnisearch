@@ -7,7 +7,7 @@ import type OmnisearchPlugin from './main'
 export class Database extends Dexie {
   public static readonly dbVersion = 10
   /** Bump when the serialized MiniSearch field/tokenizer schema changes. */
-  public static readonly minisearchIndexVersion = 2
+  public static readonly minisearchIndexVersion = 3
   searchHistory!: Dexie.Table<{ id?: number; query: string }, number>
   minisearch!: Dexie.Table<
     {

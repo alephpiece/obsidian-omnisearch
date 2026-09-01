@@ -41,13 +41,19 @@ describe('CJK indexing helpers', () => {
 })
 
 describe('Tokenizer CJK additions', () => {
-  const tokenizer = new Tokenizer({
-    settings: {
-      splitCamelCase: false,
-      tokenizeUrls: false,
-    },
-    getChsSegmenter: () => undefined,
-  } as unknown as OmnisearchPlugin)
+  function createTokenizer(chsSegmenter?: {
+    cut: (word: string, options: { search: boolean }) => string[]
+  }): Tokenizer {
+    return new Tokenizer({
+      settings: {
+        splitCamelCase: false,
+        tokenizeUrls: false,
+      },
+      getChsSegmenter: () => chsSegmenter,
+    } as unknown as OmnisearchPlugin)
+  }
+
+  const tokenizer = createTokenizer()
 
   it('keeps mixed tokens and adds their script parts for indexing', () => {
     const tokens = tokenizer.tokenizeForIndexing('中文Obsidian插件')
@@ -63,6 +69,55 @@ describe('Tokenizer CJK additions', () => {
       'Obsidian',
       'v1',
     ])
+  })
+
+  it('uses Intl.Segmenter for indexing without splitting a Han query', () => {
+    const originalSegmenter = Object.getOwnPropertyDescriptor(Intl, 'Segmenter')
+    let segmentedText = ''
+    class TestSegmenter {
+      segment(text: string) {
+        segmentedText = text
+        return [
+          { segment: '人工', isWordLike: true },
+          { segment: '智能', isWordLike: true },
+        ]
+      }
+    }
+
+    Object.defineProperty(Intl, 'Segmenter', {
+      configurable: true,
+      value: TestSegmenter,
+    })
+    try {
+      const tokenizer = createTokenizer()
+      const tokens = tokenizer.tokenizeForIndexing('人工智能')
+      const searchTokens = tokenizer.tokenizeForSearch('人工智能')
+
+      expect(segmentedText).toBe('人工智能')
+      expect(tokens).toContain('人工')
+      expect(tokens).toContain('智能')
+      expect(searchTokens).toEqual({
+        combineWith: 'OR',
+        queries: [
+          { combineWith: 'AND', queries: ['人工智能'] },
+          { combineWith: 'AND', queries: ['人工智能'] },
+          { combineWith: 'AND', queries: [] },
+        ],
+      })
+    } finally {
+      if (originalSegmenter) {
+        Object.defineProperty(Intl, 'Segmenter', originalSegmenter)
+      } else {
+        Reflect.deleteProperty(Intl, 'Segmenter')
+      }
+    }
+  })
+
+  it('keeps the configured Chinese plugin ahead of Intl.Segmenter', () => {
+    const cut = (word: string) => [`词典:${word}`]
+    const tokens = createTokenizer({ cut }).tokenizeForIndexing('人工智能')
+
+    expect(tokens).toContain('词典:人工智能')
   })
 
   it('retrieves an internal Han substring without dropping a mixed Latin constraint', () => {

@@ -7,7 +7,29 @@ import { containsHan, splitAtHanBoundaries } from './cjk'
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- that's how you're supposed to import this package
 const markdownLinkExtractor = require('markdown-link-extractor') as (value: string) => string[]
 
+type IntlWordSegmenter = {
+  segment: (text: string) => Iterable<{ segment: string; isWordLike?: boolean }>
+}
+
+function getIntlChineseSegmenter(): IntlWordSegmenter | undefined {
+  const Segmenter = (Intl as typeof Intl & {
+    Segmenter?: new (
+      locales: string,
+      options: { granularity: 'word' }
+    ) => IntlWordSegmenter
+  }).Segmenter
+  if (!Segmenter) return undefined
+
+  try {
+    return new Segmenter('zh', { granularity: 'word' })
+  } catch {
+    return undefined
+  }
+}
+
 export class Tokenizer {
+  private readonly intlSegmenter = getIntlChineseSegmenter()
+
   constructor(private plugin: OmnisearchPlugin) {}
 
   /**
@@ -71,7 +93,13 @@ export class Tokenizer {
     const urls: string[] = markdownLinkExtractor(text)
     text = urls.reduce((acc, url) => acc.replace(url, ''), text)
 
-    const tokens = [...this.tokenizeTokens(text), ...urls].filter(Boolean)
+    // Keep an uninterrupted Han query intact when only Intl.Segmenter is
+    // available. The Han-bigram fallback handles its substring recall without
+    // turning its component words into a broad AND query.
+    const tokens = [
+      ...this.tokenizeTokens(text, { useIntlSegmenter: false }),
+      ...urls,
+    ].filter(Boolean)
 
     return {
       combineWith: 'OR',
@@ -79,7 +107,9 @@ export class Tokenizer {
         { combineWith: 'AND', queries: tokens },
         {
           combineWith: 'AND',
-          queries: this.tokenizeWords(text).filter(Boolean),
+          queries: this.tokenizeWords(text, {
+            useIntlSegmenter: false,
+          }).filter(Boolean),
         },
         { combineWith: 'AND', queries: tokens.flatMap(splitHyphens) },
         ...(this.plugin.settings.splitCamelCase
@@ -103,23 +133,43 @@ export class Tokenizer {
       .filter(token => token && !containsHan(token))
   }
 
-  private tokenizeWords(text: string, { skipChs = false } = {}): string[] {
+  private tokenizeWords(
+    text: string,
+    { skipChs = false, useIntlSegmenter = true } = {}
+  ): string[] {
     const tokens = text.split(BRACKETS_AND_SPACE).flatMap(splitAtHanBoundaries)
     if (skipChs) return tokens
-    return this.tokenizeChsWord(tokens)
+    return this.tokenizeChsWord(tokens, useIntlSegmenter)
   }
 
-  private tokenizeTokens(text: string, { skipChs = false } = {}): string[] {
+  private tokenizeTokens(
+    text: string,
+    { skipChs = false, useIntlSegmenter = true } = {}
+  ): string[] {
     const tokens = text.split(SPACE_OR_PUNCTUATION).flatMap(splitAtHanBoundaries)
     if (skipChs) return tokens
-    return this.tokenizeChsWord(tokens)
+    return this.tokenizeChsWord(tokens, useIntlSegmenter)
   }
 
-  private tokenizeChsWord(tokens: string[]): string[] {
+  private tokenizeChsWord(
+    tokens: string[],
+    useIntlSegmenter: boolean
+  ): string[] {
     const segmenter = this.plugin.getChsSegmenter() as { cut: (word: string, options: { search: boolean }) => string[] }
-    if (!segmenter) return tokens
-    return tokens.flatMap(word =>
-      containsHan(word) ? segmenter.cut(word, { search: true }) : [word]
-    )
+    if (segmenter) {
+      return tokens.flatMap(word =>
+        containsHan(word) ? segmenter.cut(word, { search: true }) : [word]
+      )
+    }
+
+    const intlSegmenter = useIntlSegmenter ? this.intlSegmenter : undefined
+    if (!intlSegmenter) return tokens
+    return tokens.flatMap(word => {
+      if (!containsHan(word)) return [word]
+      const segments = [...intlSegmenter.segment(word)]
+        .filter(segment => segment.isWordLike)
+        .map(segment => segment.segment)
+      return segments.length ? segments : [word]
+    })
   }
 }
