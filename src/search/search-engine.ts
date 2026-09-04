@@ -253,6 +253,14 @@ export class SearchEngine {
         }
       )
 
+      // mergeSearchResults keeps the primary result for duplicate IDs. Remove
+      // those duplicates now so the fallback never loads their documents just
+      // to perform a verification whose outcome cannot affect the result.
+      const primaryIds = new Set(results.map(result => String(result.id)))
+      fallbackResults = fallbackResults.filter(
+        result => !primaryIds.has(String(result.id))
+      )
+
       // Preserve adjacent Latin/numeric constraints in a mixed query. For
       // example, "Obsidian时候" must not return a note containing only "时候".
       const nonHanTokens = this.tokenizer.getNonHanTokens(searchText)

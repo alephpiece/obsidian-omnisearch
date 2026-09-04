@@ -120,6 +120,22 @@ describe('Tokenizer CJK additions', () => {
     expect(tokens).toContain('词典:人工智能')
   })
 
+  it('falls back to raw Han tokens when Intl.Segmenter is unavailable', () => {
+    const originalSegmenter = Object.getOwnPropertyDescriptor(Intl, 'Segmenter')
+    Reflect.deleteProperty(Intl, 'Segmenter')
+    try {
+      const tokens = createTokenizer().tokenizeForIndexing('人工智能')
+
+      expect(tokens).toContain('人工智能')
+      expect(tokens).not.toContain('人工')
+      expect(tokens).not.toContain('智能')
+    } finally {
+      if (originalSegmenter) {
+        Object.defineProperty(Intl, 'Segmenter', originalSegmenter)
+      }
+    }
+  })
+
   it('retrieves an internal Han substring without dropping a mixed Latin constraint', () => {
     type TestDocument = {
       content: string
@@ -184,7 +200,10 @@ describe('CJK search fallback', () => {
     }
   }
 
-  function createEngine(documents: IndexedDocument[]): SearchEngine {
+  function createEngine(
+    documents: IndexedDocument[],
+    onGetDocument?: (path: string) => void
+  ): SearchEngine {
     const documentsByPath = new Map(documents.map(document => [document.path, document]))
     const plugin = {
       settings: {
@@ -212,7 +231,10 @@ describe('CJK search fallback', () => {
         },
       },
       documentsRepository: {
-        getDocument: async (path: string) => documentsByPath.get(path),
+        getDocument: async (path: string) => {
+          onGetDocument?.(path)
+          return documentsByPath.get(path)
+        },
       },
       getChsSegmenter: () => undefined,
     } as unknown as OmnisearchPlugin
@@ -255,5 +277,20 @@ describe('CJK search fallback', () => {
     })
 
     expect(results.map(result => String(result.id))).toEqual(['exact.md'])
+  })
+
+  it('does not verify fallback duplicates already found by primary search', async () => {
+    const loadedPaths: string[] = []
+    const engine = createEngine(
+      [createDocument('exact.md', '人工智能')],
+      path => loadedPaths.push(path)
+    )
+
+    const results = await engine.search(makeQuery('人工智能'), {
+      prefixLength: 1,
+    })
+
+    expect(results.map(result => String(result.id))).toEqual(['exact.md'])
+    expect(loadedPaths).toEqual(['exact.md'])
   })
 })
