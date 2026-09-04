@@ -154,7 +154,7 @@ export default class OmnisearchPlugin extends Plugin {
           if (this.notesIndexer.isFileIndexable(file.path)) {
             logVerbose('Renaming file', file.path)
             this.documentsRepository.removeDocument(oldPath)
-            await this.documentsRepository.addDocument(file.path)
+            this.documentsRepository.removeDocument(file.path)
 
             searchEngine.removeFromPaths([oldPath])
             await searchEngine.addFromPaths([file.path])

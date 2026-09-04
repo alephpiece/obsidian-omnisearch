@@ -120,6 +120,7 @@ describe('SearchEngine', () => {
     releaseMappings.resolve()
     await indexing
 
+    expect(requestedPaths).toHaveLength(paths.length)
     expect(engine.getSerializedMiniSearch().documentCount).toBe(paths.length)
     expect(engine.getSerializedIndexedDocuments().map(doc => doc.path)).toEqual([
       ...markdownPaths,

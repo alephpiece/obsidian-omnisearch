@@ -32,13 +32,14 @@ export class NotesIndexer {
     const existing = queued.filter(file =>
       this.plugin.app.vault.getAbstractFileByPath(file.path)
     )
-    for (const file of existing) {
-      logVerbose('Updating file', file.path)
-      await this.plugin.documentsRepository.addDocument(file.path)
-    }
-
     const existingPaths = existing.map(file => file.path)
     if (existingPaths.length) {
+      for (const path of existingPaths) {
+        logVerbose('Updating file', path)
+        // A cached document can predate the modify event. Drop it so the
+        // indexing pass maps the current file exactly once.
+        this.plugin.documentsRepository.removeDocument(path)
+      }
       this.plugin.searchEngine.removeFromPaths(existingPaths)
       await this.plugin.searchEngine.addFromPaths(existingPaths)
     }

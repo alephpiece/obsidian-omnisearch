@@ -5,7 +5,7 @@ import {
   TFile,
   WorkspaceLeaf,
 } from 'obsidian'
-import OmnisearchPlugin from '../main'
+import type OmnisearchPlugin from '../main'
 import type { ResultNote } from '../globals'
 
 /**
