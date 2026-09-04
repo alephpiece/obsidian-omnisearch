@@ -200,8 +200,8 @@ export default class OmnisearchPlugin extends Plugin {
       removeEventListener('blur', this.refreshIndexCallback)
     }
 
-    // Clear cache when disabling Omnisearch
-    if (process.env.NODE_ENV === 'production') {
+    // Development builds should start from a clean cache on reload.
+    if (process.env.NODE_ENV !== 'production') {
       await this.database.clearCache()
     }
     this.apiHttpServer.close()
