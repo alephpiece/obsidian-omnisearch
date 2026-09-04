@@ -1,17 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import type { IndexedDocument } from '../globals'
+import { RecencyCutoff, type IndexedDocument } from '../globals'
 import type OmnisearchPlugin from '../main'
+import { Query } from '../search/query'
 import { SearchEngine } from '../search/search-engine'
 
 const MAX_CONCURRENT_DOCUMENT_MAPPINGS = 50
 
-function createDocument(path: string): IndexedDocument {
+function createDocument(
+  path: string,
+  content = `content for ${path}`
+): IndexedDocument {
   return {
     path,
     basename: path.split('/').pop() ?? path,
     displayTitle: '',
     mtime: 1,
-    content: `content for ${path}`,
+    content,
     aliases: '',
     tags: [],
     unmarkedTags: [],
@@ -27,14 +31,30 @@ function createEngine(
 ): SearchEngine {
   const plugin = {
     settings: {
+      fuzziness: '0',
+      weightBasename: 1,
+      weightDirectory: 1,
+      weightH1: 1,
+      weightH2: 1,
+      weightH3: 1,
+      weightUnmarkedTags: 1,
+      recencyBoost: RecencyCutoff.Disabled,
       ignoreDiacritics: false,
       ignoreArabicDiacritics: false,
+      hideExcluded: false,
+      downrankedFoldersFilters: [],
+      weightCustomProperties: [],
+      displayTitle: '',
       splitCamelCase: false,
       tokenizeUrls: false,
     },
     app: {
       vault: {
         getAbstractFileByPath: () => ({}),
+      },
+      metadataCache: {
+        getCache: () => null,
+        isUserIgnored: () => false,
       },
     },
     documentsRepository: {
@@ -53,7 +73,7 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve }
 }
 
-describe('SearchEngine.addFromPaths()', () => {
+describe('SearchEngine', () => {
   it('bounds document mapping while keeping markdown files first', async () => {
     // Arrange
     const markdownPaths = Array.from(
@@ -105,5 +125,51 @@ describe('SearchEngine.addFromPaths()', () => {
       ...markdownPaths,
       attachmentPath,
     ])
+  })
+
+  it('does not load result documents without content filters', async () => {
+    const path = 'notes/entry.md'
+    const document = createDocument(path)
+    let documentLoads = 0
+    const engine = createEngine(async requestedPath => {
+      documentLoads++
+      return requestedPath === path ? document : createDocument(requestedPath)
+    })
+    await engine.addFromPaths([path])
+    documentLoads = 0
+
+    const results = await engine.search(
+      new Query('content', {
+        ignoreDiacritics: false,
+        ignoreArabicDiacritics: false,
+      }),
+      { prefixLength: 1 }
+    )
+
+    expect(results.map(result => result.id)).toEqual([path])
+    expect(documentLoads).toBe(0)
+  })
+
+  it('loads result documents when an exact-match filter needs content', async () => {
+    const path = 'notes/entry.md'
+    const document = createDocument(path, 'exact phrase')
+    let documentLoads = 0
+    const engine = createEngine(async requestedPath => {
+      documentLoads++
+      return requestedPath === path ? document : createDocument(requestedPath)
+    })
+    await engine.addFromPaths([path])
+    documentLoads = 0
+
+    const results = await engine.search(
+      new Query('"exact phrase"', {
+        ignoreDiacritics: false,
+        ignoreArabicDiacritics: false,
+      }),
+      { prefixLength: 1 }
+    )
+
+    expect(results.map(result => result.id)).toEqual([path])
+    expect(documentLoads).toBe(1)
   })
 })

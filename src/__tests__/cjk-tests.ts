@@ -291,6 +291,6 @@ describe('CJK search fallback', () => {
     })
 
     expect(results.map(result => String(result.id))).toEqual(['exact.md'])
-    expect(loadedPaths).toEqual(['exact.md'])
+    expect(loadedPaths).toEqual([])
   })
 })

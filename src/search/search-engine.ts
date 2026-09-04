@@ -459,46 +459,48 @@ export class SearchEngine {
 
     if (results.length) logVerbose('First result:', results[0])
 
-    const documents = await Promise.all(
-      results.map(async result => {
-        const doc = await this.plugin.documentsRepository.getDocument(result.id)
-        if (!doc) {
-          console.warn(`Omnisearch - Note "${result.id}" not in the live cache`)
-          countError(true)
-        }
-        return doc
-      })
-    )
-
     // If the search query contains quotes, filter out results that don't have the exact match
     const exactTerms = query.getExactTerms()
-    if (exactTerms.length) {
-      logVerbose('Filtering with quoted terms: ', exactTerms)
-      results = results.filter(r => {
-        const document = documents.find(d => d.path === r.id)
-        const title = document?.path.toLowerCase() ?? ''
-        const content = normalizeExactMatchContent(document?.content ?? '')
-        return exactTerms.every(
-          q =>
-            content.includes(q) ||
-            removeDiacritics(
-              title,
-              this.plugin.settings.ignoreArabicDiacritics
-            ).includes(q)
-        )
-      })
-    }
-
-    // If the search query contains exclude terms, filter out results that have them
     const exclusions = query.query.exclude.text
-    if (exclusions.length) {
-      logVerbose('Filtering with exclusions')
-      results = results.filter(r => {
-        const content = (
-          documents.find(d => d.path === r.id)?.content ?? ''
-        ).toLowerCase()
-        return exclusions.every(q => !content.includes(q))
-      })
+    if (exactTerms.length || exclusions.length) {
+      const documents = await Promise.all(
+        results.map(async result => {
+          const doc = await this.plugin.documentsRepository.getDocument(result.id)
+          if (!doc) {
+            console.warn(`Omnisearch - Note "${result.id}" not in the live cache`)
+            countError(true)
+          }
+          return doc
+        })
+      )
+
+      if (exactTerms.length) {
+        logVerbose('Filtering with quoted terms: ', exactTerms)
+        results = results.filter(r => {
+          const document = documents.find(d => d.path === r.id)
+          const title = document?.path.toLowerCase() ?? ''
+          const content = normalizeExactMatchContent(document?.content ?? '')
+          return exactTerms.every(
+            q =>
+              content.includes(q) ||
+              removeDiacritics(
+                title,
+                this.plugin.settings.ignoreArabicDiacritics
+              ).includes(q)
+          )
+        })
+      }
+
+      // If the search query contains exclude terms, filter out results that have them
+      if (exclusions.length) {
+        logVerbose('Filtering with exclusions')
+        results = results.filter(r => {
+          const content = (
+            documents.find(d => d.path === r.id)?.content ?? ''
+          ).toLowerCase()
+          return exclusions.every(q => !content.includes(q))
+        })
+      }
     }
 
     logVerbose('Deduping')

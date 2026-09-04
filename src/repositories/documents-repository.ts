@@ -4,6 +4,7 @@ import type { IndexedDocument } from '../globals'
 import type OmnisearchPlugin from '../main'
 import { getHanBigramsFromFields } from '../search/cjk'
 import { getNonExistingNotes } from '../tools/notes'
+import { LiveDocumentCache } from './live-document-cache'
 import {
   countError,
   extractHeadingsFromCache,
@@ -21,10 +22,9 @@ import {
 
 export class DocumentsRepository {
   /**
-   * The "live cache", containing all indexed vault files
-   * in the form of IndexedDocuments
+   * Bounded live cache of recently used indexed vault files.
    */
-  private documents: Map<string, IndexedDocument> = new Map()
+  private documents = new LiveDocumentCache()
   private errorsCount = 0
   private errorsWarned = false
 
@@ -42,22 +42,24 @@ export class DocumentsRepository {
    * Set or update the live cache with the content of the given file.
    * @param path
    */
-  public async addDocument(path: string): Promise<void> {
+  public async addDocument(path: string): Promise<IndexedDocument | undefined> {
     try {
       const doc = await this.getAndMapIndexedDocument(path)
       if (!doc.path) {
         console.error(
           `Missing .path field in IndexedDocument "${doc.basename}", skipping`
         )
-        return
+        return undefined
       }
       this.documents.set(path, doc)
       this.plugin.embedsRepository.refreshEmbedsForNote(path)
+      return doc
     } catch (e) {
       console.warn(`Omnisearch: Error while adding "${path}" to live cache`, e)
       // Shouldn't be needed, but...
       this.removeDocument(path)
       countError()
+      return undefined
     }
   }
 
@@ -66,12 +68,11 @@ export class DocumentsRepository {
   }
 
   public async getDocument(path: string): Promise<IndexedDocument> {
-    if (this.documents.has(path)) {
-      return this.documents.get(path)!
-    }
+    const cachedDocument = this.documents.get(path)
+    if (cachedDocument) return cachedDocument
+
     logVerbose('Generating IndexedDocument from', path)
-    await this.addDocument(path)
-    const document = this.documents.get(path)
+    const document = await this.addDocument(path)
 
     // Only happens if the cache is corrupted
     if (!document) {
