@@ -58,6 +58,7 @@ export class Database extends Dexie {
   }
 
   public async writeMinisearchCache(): Promise<void> {
+    await this.plugin.searchEngine.compactForCache()
     const minisearchJson = this.plugin.searchEngine.getSerializedMiniSearch()
     const paths = this.plugin.searchEngine.getSerializedIndexedDocuments()
     const database = this.plugin.database

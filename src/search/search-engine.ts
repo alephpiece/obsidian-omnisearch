@@ -41,6 +41,8 @@ const primarySearchFields = [
 // starting one task for every file during a full vault rebuild.
 const DOCUMENT_MAPPING_BATCH_SIZE = 50
 const INDEXING_BATCH_SIZE = 500
+const CACHE_COMPACTION_MIN_DIRT_COUNT = 100
+const CACHE_COMPACTION_MIN_DIRT_FACTOR = 0.01
 
 export class SearchEngine {
   private tokenizer: Tokenizer
@@ -636,6 +638,22 @@ export class SearchEngine {
    */
   public getSerializedMiniSearch(): AsPlainObject {
     return this.minisearch.toJSON()
+  }
+
+  /**
+   * Remove a material amount of discarded postings before serializing the
+   * index. MiniSearch's default auto-vacuum threshold is intentionally high,
+   * which can otherwise preserve stale postings in a large vault's cache.
+   */
+  public async compactForCache(): Promise<void> {
+    if (
+      this.minisearch.isVacuuming ||
+      this.minisearch.dirtCount < CACHE_COMPACTION_MIN_DIRT_COUNT ||
+      this.minisearch.dirtFactor < CACHE_COMPACTION_MIN_DIRT_FACTOR
+    ) {
+      return
+    }
+    await this.minisearch.vacuum()
   }
 
   /**

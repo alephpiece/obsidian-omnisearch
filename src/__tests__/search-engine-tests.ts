@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { RecencyCutoff, type IndexedDocument } from '../globals'
 import type OmnisearchPlugin from '../main'
 import { Query } from '../search/query'
@@ -146,7 +146,7 @@ describe('SearchEngine', () => {
       { prefixLength: 1 }
     )
 
-    expect(results.map(result => result.id)).toEqual([path])
+    expect(results.map(result => String(result.id))).toEqual([path])
     expect(documentLoads).toBe(0)
   })
 
@@ -169,7 +169,39 @@ describe('SearchEngine', () => {
       { prefixLength: 1 }
     )
 
-    expect(results.map(result => result.id)).toEqual([path])
+    expect(results.map(result => String(result.id))).toEqual([path])
     expect(documentLoads).toBe(1)
+  })
+
+  it('compacts only material stale postings before writing a cache', async () => {
+    const engine = createEngine(async path => createDocument(path))
+    const engineWithStubbedIndex = engine as unknown as {
+      minisearch: {
+        dirtCount: number
+        dirtFactor: number
+        isVacuuming: boolean
+        vacuum: () => Promise<void>
+      }
+    }
+
+    const cases: Array<[number, number, boolean, boolean]> = [
+      [99, 0.02, false, false],
+      [100, 0.009, false, false],
+      [100, 0.01, true, false],
+      [100, 0.01, false, true],
+    ]
+    for (const [dirtCount, dirtFactor, isVacuuming, shouldVacuum] of cases) {
+      const vacuum = vi.fn().mockResolvedValue(undefined)
+      engineWithStubbedIndex.minisearch = {
+        dirtCount,
+        dirtFactor,
+        isVacuuming,
+        vacuum,
+      }
+
+      await engine.compactForCache()
+
+      expect(vacuum).toHaveBeenCalledTimes(shouldVacuum ? 1 : 0)
+    }
   })
 })
