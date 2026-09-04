@@ -37,6 +37,11 @@ const primarySearchFields = [
   'headings3',
 ]
 
+// Mapping can invoke file readers and external text extractors, so avoid
+// starting one task for every file during a full vault rebuild.
+const DOCUMENT_MAPPING_BATCH_SIZE = 50
+const INDEXING_BATCH_SIZE = 500
+
 export class SearchEngine {
   private tokenizer: Tokenizer
   private minisearch: MiniSearch
@@ -100,46 +105,56 @@ export class SearchEngine {
    */
   public async addFromPaths(paths: string[]): Promise<void> {
     logVerbose('Adding files', paths)
-    let documents = (
-      await Promise.all(
-        paths.map(
-          async path => await this.plugin.documentsRepository.getDocument(path)
-        )
-      )
-    ).filter(d => !!d?.path)
-    logVerbose('Sorting documents to first index markdown')
-    // Index markdown files first
-    documents = sortBy(documents, d => (d.path.endsWith('.md') ? 0 : 1))
 
+    logVerbose('Sorting paths to first index markdown')
+    // Index markdown files first
+    const sortedPaths = sortBy(paths, path => (path.endsWith('.md') ? 0 : 1))
+
+    const documentsToIndex: IndexedDocument[] = []
+    for (const pathBatch of chunkArray(sortedPaths, DOCUMENT_MAPPING_BATCH_SIZE)) {
+      const documents = (
+        await Promise.all(
+          pathBatch.map(path => this.plugin.documentsRepository.getDocument(path))
+        )
+      ).filter(d => !!d?.path)
+      documentsToIndex.push(...documents)
+
+      while (documentsToIndex.length >= INDEXING_BATCH_SIZE) {
+        const docs = documentsToIndex.splice(0, INDEXING_BATCH_SIZE)
+        await this.addDocumentsToIndex(docs)
+      }
+    }
+
+    if (documentsToIndex.length) {
+      await this.addDocumentsToIndex(documentsToIndex)
+    }
+  }
+
+  private async addDocumentsToIndex(docs: IndexedDocument[]): Promise<void> {
+    logVerbose('Indexing into search engine', docs)
     // If a document is already added, discard it
     this.removeFromPaths(
-      documents.filter(d => this.indexedDocuments.has(d.path)).map(d => d.path)
+      docs.filter(d => this.indexedDocuments.has(d.path)).map(d => d.path)
     )
+    // Update the list of indexed docs
+    docs.forEach(doc => this.indexedDocuments.set(doc.path, doc.mtime))
 
-    // Split the documents in smaller chunks to add them to minisearch
-    const chunkedDocs = chunkArray(documents, 500)
-    for (const docs of chunkedDocs) {
-      logVerbose('Indexing into search engine', docs)
-      // Update the list of indexed docs
-      docs.forEach(doc => this.indexedDocuments.set(doc.path, doc.mtime))
+    // Discard files that may have been already added (though it shouldn't happen)
+    const alreadyAdded = docs.filter(doc => this.minisearch.has(doc.path))
+    this.removeFromPaths(alreadyAdded.map(o => o.path))
 
-      // Discard files that may have been already added (though it shouldn't happen)
-      const alreadyAdded = docs.filter(doc => this.minisearch.has(doc.path))
-      this.removeFromPaths(alreadyAdded.map(o => o.path))
+    // Add docs to minisearch
+    await this.minisearch.addAllAsync(docs)
 
-      // Add docs to minisearch
-      await this.minisearch.addAllAsync(docs)
-
-      // A file may have been deleted while we were reading/indexing it.
-      // Its delete handler ran before the doc was in minisearch,
-      // so it couldn't discard it.
-      // Remove vanished files now to avoid keeping stale entries.
-      const deleted = docs.filter(
-        doc => !this.plugin.app.vault.getAbstractFileByPath(doc.path)
-      )
-      if (deleted.length) {
-        this.removeFromPaths(deleted.map(doc => doc.path))
-      }
+    // A file may have been deleted while we were reading/indexing it.
+    // Its delete handler ran before the doc was in minisearch,
+    // so it couldn't discard it.
+    // Remove vanished files now to avoid keeping stale entries.
+    const deleted = docs.filter(
+      doc => !this.plugin.app.vault.getAbstractFileByPath(doc.path)
+    )
+    if (deleted.length) {
+      this.removeFromPaths(deleted.map(doc => doc.path))
     }
   }
 

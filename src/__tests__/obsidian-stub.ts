@@ -3,6 +3,10 @@
 
 type Frontmatter = Record<string, unknown>
 
+export function getAllTags(): string[] {
+  return []
+}
+
 export function parseFrontMatterAliases(
   frontmatter: Frontmatter
 ): string[] | undefined {
@@ -16,4 +20,12 @@ export function parseFrontMatterAliases(
       .filter(s => s.length > 0)
   }
   return undefined
+}
+
+export class Notice {
+  constructor(_message: string, _timeout?: number) {}
+}
+
+export const Platform = {
+  isMacOS: false,
 }
